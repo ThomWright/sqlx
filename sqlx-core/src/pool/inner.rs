@@ -170,14 +170,23 @@ impl<DB: Database> SharedPool<DB> {
         let start = Instant::now();
         let deadline = start + self.options.connect_timeout;
 
-        // TODO: Not ideal because we have to synchronously wait for a lock
-        let saturating = self.semaphore.permits() == 0;
+        let mut saturating = false;
 
         let result = sqlx_rt::timeout(
             self.options.connect_timeout,
             async {
+                // See if we can immediately acquire a permit. If not, the pool is full.
+                let mut immediate_permit = self.semaphore.try_acquire(1);
+
                 loop {
-                    let permit = self.semaphore.acquire(1).await;
+                    let permit = match immediate_permit.take() {
+                        Some(permit) => permit,
+                        None => {
+                            // The pool is full. We'll have to wait.
+                            saturating = true;
+                            self.semaphore.acquire(1).await
+                        }
+                    };
 
                     if self.is_closed() {
                         return Err(Error::PoolClosed);
