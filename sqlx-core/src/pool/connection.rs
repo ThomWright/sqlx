@@ -18,6 +18,7 @@ use std::future::Future;
 pub struct PoolConnection<DB: Database> {
     live: Option<Live<DB>>,
     pub(crate) pool: Arc<SharedPool<DB>>,
+    pub(super) acquired_at: Instant,
 }
 
 pub(super) struct Live<DB: Database> {
@@ -110,6 +111,7 @@ impl<DB: Database> PoolConnection<DB> {
         // in case the returned `Future` isn't executed, like if it's spawned into a dying runtime
         // https://github.com/launchbadge/sqlx/issues/1396
         let floating = self.live.take().map(|live| live.float(self.pool.clone()));
+        let acquired_at = self.acquired_at;
 
         async move {
             let mut floating = if let Some(floating) = floating {
@@ -136,6 +138,7 @@ impl<DB: Database> PoolConnection<DB> {
                 drop(floating);
             } else {
                 // if the connection is still viable, release it to the pool
+                floating.guard.pool.increment_active_time(&acquired_at);
                 floating.release();
             }
         }
@@ -211,6 +214,7 @@ impl<DB: Database> Floating<DB, Live<DB>> {
         PoolConnection {
             live: Some(inner),
             pool: Arc::clone(pool),
+            acquired_at: Instant::now(),
         }
     }
 

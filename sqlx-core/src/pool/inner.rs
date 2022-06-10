@@ -11,7 +11,7 @@ use futures_intrusive::sync::{Semaphore, SemaphoreReleaser};
 use std::cmp;
 use std::mem;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use std::time::{Duration, Instant};
@@ -30,6 +30,7 @@ pub(crate) struct SharedPool<DB: Database> {
     is_closed: AtomicBool,
     pub(super) on_closed: event_listener::Event,
     pub(super) options: PoolOptions<DB>,
+    pub(super) connection_active_time_millis: AtomicU64,
 }
 
 impl<DB: Database> SharedPool<DB> {
@@ -53,6 +54,7 @@ impl<DB: Database> SharedPool<DB> {
             is_closed: AtomicBool::new(false),
             on_closed: event_listener::Event::new(),
             options,
+            connection_active_time_millis: AtomicU64::new(0),
         };
 
         let pool = Arc::new(pool);
@@ -256,6 +258,17 @@ impl<DB: Database> SharedPool<DB> {
             sqlx_rt::sleep(backoff).await;
             backoff = cmp::min(backoff * 2, max_backoff);
         }
+    }
+
+    pub(super) fn increment_active_time(&self, from: &Instant) {
+        self.connection_active_time_millis.fetch_add(
+            from.elapsed().as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    pub fn active_time_millis(&self) -> u64 {
+        self.connection_active_time_millis.load(Ordering::Relaxed)
     }
 }
 

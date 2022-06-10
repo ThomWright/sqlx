@@ -435,6 +435,13 @@ impl<DB: Database> Pool<DB> {
     pub fn num_idle(&self) -> usize {
         self.0.num_idle()
     }
+
+    /// Returns the total number of milliseconds connections have spent active and in use.
+    ///
+    /// This is incremented when connections are returned to the pool.
+    pub fn active_time_millis(&self) -> u64 {
+        self.0.active_time_millis()
+    }
 }
 
 #[cfg(all(
