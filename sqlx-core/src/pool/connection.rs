@@ -138,7 +138,7 @@ impl<DB: Database> PoolConnection<DB> {
                 drop(floating);
             } else {
                 // if the connection is still viable, release it to the pool
-                floating.guard.pool.increment_active_time(&acquired_at);
+                floating.guard.pool.increment_in_use_time(&acquired_at);
                 floating.release();
             }
         }

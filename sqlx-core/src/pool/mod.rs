@@ -439,8 +439,8 @@ impl<DB: Database> Pool<DB> {
     /// Returns the total number of milliseconds connections have spent active and in use.
     ///
     /// This is incremented when connections are returned to the pool.
-    pub fn active_time_millis(&self) -> u64 {
-        self.0.active_time_millis()
+    pub fn in_use_time_millis(&self) -> u64 {
+        self.0.in_use_time_millis()
     }
 }
 

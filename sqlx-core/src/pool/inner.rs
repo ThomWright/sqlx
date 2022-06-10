@@ -30,7 +30,8 @@ pub(crate) struct SharedPool<DB: Database> {
     is_closed: AtomicBool,
     pub(super) on_closed: event_listener::Event,
     pub(super) options: PoolOptions<DB>,
-    pub(super) connection_active_time_millis: AtomicU64,
+    pub(super) connection_use_time_millis: AtomicU64,
+    pub(super) wait_time_millis: AtomicU64,
 }
 
 impl<DB: Database> SharedPool<DB> {
@@ -54,7 +55,8 @@ impl<DB: Database> SharedPool<DB> {
             is_closed: AtomicBool::new(false),
             on_closed: event_listener::Event::new(),
             options,
-            connection_active_time_millis: AtomicU64::new(0),
+            connection_use_time_millis: AtomicU64::new(0),
+            wait_time_millis: AtomicU64::new(0),
         };
 
         let pool = Arc::new(pool);
@@ -165,9 +167,13 @@ impl<DB: Database> SharedPool<DB> {
             return Err(Error::PoolClosed);
         }
 
-        let deadline = Instant::now() + self.options.connect_timeout;
+        let start = Instant::now();
+        let deadline = start + self.options.connect_timeout;
 
-        sqlx_rt::timeout(
+        // TODO: Not ideal because we have to synchronously wait for a lock
+        let saturating = self.semaphore.permits() == 0;
+
+        let result = sqlx_rt::timeout(
             self.options.connect_timeout,
             async {
                 loop {
@@ -184,7 +190,9 @@ impl<DB: Database> SharedPool<DB> {
                         Ok(conn) => match check_conn(conn, &self.options).await {
 
                             // All good!
-                            Ok(live) => return Ok(live),
+                            Ok(live) => {
+
+                                return Ok(live)},
 
                             // if the connection isn't usable for one reason or another,
                             // we get the `DecrementSizeGuard` back to open a new one
@@ -204,8 +212,13 @@ impl<DB: Database> SharedPool<DB> {
                 }
             }
         )
-            .await
-            .map_err(|_| Error::PoolTimedOut)?
+            .await;
+
+        if saturating {
+            self.increment_wait_time(&start);
+        }
+
+        result.map_err(|_| Error::PoolTimedOut)?
     }
 
     pub(super) async fn connection(
@@ -260,15 +273,26 @@ impl<DB: Database> SharedPool<DB> {
         }
     }
 
-    pub(super) fn increment_active_time(&self, from: &Instant) {
-        self.connection_active_time_millis.fetch_add(
+    pub(super) fn increment_in_use_time(&self, from: &Instant) {
+        self.connection_use_time_millis.fetch_add(
             from.elapsed().as_millis() as u64,
             std::sync::atomic::Ordering::Relaxed,
         );
     }
 
-    pub fn active_time_millis(&self) -> u64 {
-        self.connection_active_time_millis.load(Ordering::Relaxed)
+    pub fn in_use_time_millis(&self) -> u64 {
+        self.connection_use_time_millis.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn increment_wait_time(&self, from: &Instant) {
+        self.wait_time_millis.fetch_add(
+            from.elapsed().as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    pub fn wait_millis(&self) -> u64 {
+        self.wait_time_millis.load(Ordering::Relaxed)
     }
 }
 
